@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Deep-RCA: Azure identifiers / runtime config (NEVER commit)
+infra/azure-resources.env
+infra/runtime.env
+
+# Eval output may contain ground-truth values from scorecards
+eval/scorecards/
+
+# Local Claude Code settings (machine-local tool permissions)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db

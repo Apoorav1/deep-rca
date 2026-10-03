@@ -1,0 +1,97 @@
+{
+  "schema": "deep-rca/tests@1",
+  "description": "Acceptance test manifest. Phase 1 must be fully green before Phase 2 starts.",
+  "phases": {
+    "1": {
+      "objective": "End-to-end thin slice on one OpenRCA incident with ground truth isolated.",
+      "gate": "ALL tests below must pass before Phase 2 begins.",
+      "tests": [
+        {
+          "id": "p1-load-incident",
+          "requirement": "Load exactly one OpenRCA incident as a typed Incident (no root-cause fields).",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "Incident object constructed; asserts Incident has no attribute exposing root_services/chaos_types."
+        },
+        {
+          "id": "p1-hide-ground-truth",
+          "requirement": "Ground truth is loaded only by eval/ and is unreachable from src/deeprca.",
+          "type": "isolation",
+          "status": "pass",
+          "acceptance": "Static import-graph check finds no src/deeprca -> eval edge; GT loader import from src/deeprca raises."
+        },
+        {
+          "id": "p1-telemetry-tools",
+          "requirement": "Telemetry is exposed only through tools over the Evidence Plane.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "At least 3 distinct telemetry tools callable (e.g. query_metrics, query_traces, query_topology); each returns Evidence with mandatory provenance."
+        },
+        {
+          "id": "p1-hypotheses",
+          "requirement": "InvestigatorAgent formulates >=2 competing hypotheses.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "Ledger contains >=2 Hypothesis objects, each with a falsification_test."
+        },
+        {
+          "id": "p1-three-tool-calls",
+          "requirement": "At least three evidence-gathering tool calls are made.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "Ledger tool_calls length >= 3, each linked to resulting evidence ids."
+        },
+        {
+          "id": "p1-persistent-ledger",
+          "requirement": "Hypothesis ledger persists and is authoritative (not conversation history).",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "Ledger survives a simulated restart (reload from store); discarding conversation history does not change ledger contents."
+        },
+        {
+          "id": "p1-evidence-provenance",
+          "requirement": "Every Evidence object carries complete provenance.",
+          "type": "unit",
+          "status": "pass",
+          "acceptance": "Constructing Evidence without provenance raises; all stored evidence has tool_call_id, source_uri, query, retrieved_at, time_range."
+        },
+        {
+          "id": "p1-hypothesis-both-sides",
+          "requirement": "Every hypothesis tracks supporting and contradicting evidence.",
+          "type": "unit",
+          "status": "pass",
+          "acceptance": "Hypothesis has supporting_evidence[] and contradicting_evidence[] fields; reducer updates both."
+        },
+        {
+          "id": "p1-propose-root-cause",
+          "requirement": "Investigator proposes a root cause with a CausalPath.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "proposed_root_cause present; CausalPath is graph-valid and temporally monotonic."
+        },
+        {
+          "id": "p1-blind-evaluator",
+          "requirement": "In-loop EvaluatorAgent runs independently and emits one decision, with no GT access.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "Evaluation.decision in {CONTINUE,CONCLUDE,ESCALATE}; runtime scan of evaluator inputs finds no GT value."
+        },
+        {
+          "id": "p1-offline-compare",
+          "requirement": "Offline framework compares the frozen result against ground truth.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "Scorecard produced with localization (exact + top-k), fault-type accuracy, causal-path validity; computed only in eval/."
+        },
+        {
+          "id": "p1-no-gt-leak-runtime",
+          "requirement": "No ground-truth value appears anywhere the Investigator can see.",
+          "type": "isolation",
+          "status": "pass",
+          "acceptance": "Runtime scan of projection + tool results + final ledger for root_services/chaos_types/timing returns zero hits."
+        }
+      ],
+      "gate_status": "GREEN (20/20 tests pass, incl. live Azure integration 2026-10-03)"
+    }
+  }
+}
