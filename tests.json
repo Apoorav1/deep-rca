@@ -92,6 +92,48 @@
         }
       ],
       "gate_status": "GREEN (20/20 tests pass, incl. live Azure integration 2026-10-03)"
+    },
+    "3": {
+      "objective": "Knowledge plane: correct root-cause localization via pod-health/silent-service/topology reasoning.",
+      "gate": "Phase-3 accuracy tests must pass (primary incident); aggregate reported by eval/harness.py.",
+      "gate_status": "GREEN (3/3 incidents exact localization + fault-type + valid path + isolation clean, 2026-10-03)",
+      "tests": [
+        {
+          "id": "p3-localization-hit",
+          "requirement": "Investigator localizes a true root-cause service.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "scorecard localization_hit True on primary incident."
+        },
+        {
+          "id": "p3-fault-type-accuracy",
+          "requirement": "Investigator names the correct fault type.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "scorecard fault_type_accuracy True."
+        },
+        {
+          "id": "p3-causal-path-valid",
+          "requirement": "Proposed causal path is graph-valid and temporally monotonic.",
+          "type": "integration",
+          "status": "pass",
+          "acceptance": "scorecard causal_path_valid True."
+        },
+        {
+          "id": "p3-isolation-clean",
+          "requirement": "No GT markers leak with the knowledge plane active.",
+          "type": "isolation",
+          "status": "pass",
+          "acceptance": "runtime isolation scan returns zero markers."
+        },
+        {
+          "id": "p3-knowledge-plane",
+          "requirement": "Domain knowledge (fault signatures + localization heuristic) injected into projection, GT-free.",
+          "type": "unit",
+          "status": "pass",
+          "acceptance": "projection contains knowledge section; src/deeprca/knowledge has no GT access."
+        }
+      ]
     }
   }
 }

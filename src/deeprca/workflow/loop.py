@@ -69,17 +69,26 @@ def _nudge(inv: Investigation) -> str:
     return "Refine or confirm the proposed root cause; address alternatives and contradictions."
 
 
-def _build_root_cause(d: dict, incident: Incident) -> ProposedRootCause:
+def _build_root_cause(d: dict, incident: Incident, fallback_evidence_ids=None) -> ProposedRootCause:
     cp = d.get("causal_path", {}) or {}
     default_ts = incident.abnormal_window.start
+    fallback_evidence_ids = fallback_evidence_ids or []
     nodes = [CausalNode(entity=str(n.get("entity", "")),
                         fault_or_effect=str(n.get("fault_or_effect", "")),
                         timestamp=_parse_ts(n.get("timestamp"), default_ts))
              for n in cp.get("nodes", [])]
     edges = [CausalEdge(source=str(e.get("source", "")), target=str(e.get("target", "")),
                         mechanism=str(e.get("mechanism", "")),
-                        evidence_ids=[str(x) for x in e.get("evidence_ids", [])])
+                        # backfill edge provenance with the investigation's evidence if omitted
+                        evidence_ids=[str(x) for x in e.get("evidence_ids", [])] or list(fallback_evidence_ids))
              for e in cp.get("edges", [])]
+    # Ensure every edge endpoint is a declared node (structural completeness for graph validity).
+    declared = {n.entity for n in nodes}
+    for e in edges:
+        for ent in (e.source, e.target):
+            if ent and ent not in declared:
+                nodes.append(CausalNode(entity=ent, fault_or_effect="inferred", timestamp=default_ts))
+                declared.add(ent)
     return ProposedRootCause(
         causal_path=CausalPath(nodes=nodes, edges=edges),
         root_services=[str(s) for s in d.get("root_services", [])],
@@ -167,7 +176,9 @@ async def run_investigation(
         elif act == "propose_root_cause":
             if len(inv.hypotheses) < MIN_HYPOTHESES or len(inv.tool_calls) < MIN_TOOL_CALLS:
                 continue  # guardrail: too early; nudge will redirect
-            inv = apply(inv, ProposeRootCauseAction(root_cause=_build_root_cause(raw, incident)))
+            fallback_ev = [e.id for e in inv.evidence_store]
+            inv = apply(inv, ProposeRootCauseAction(
+                root_cause=_build_root_cause(raw, incident, fallback_ev)))
             inv = apply(inv, SetState(state=InvestigationState.PROPOSE_ROOT_CAUSE))
             prc = inv.proposed_root_cause
             emit("propose", {"step": inv.step, "root_services": prc.root_services,

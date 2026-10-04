@@ -61,6 +61,9 @@ def query_metrics(lake, inc, tool_call_id, service: str | None = None, top: int 
     mag = joined[["normal", "abnormal"]].abs().max(axis=1)
     name_bad = joined.index.get_level_values("metric").astype(str).str.contains(
         "capacity|limit|available|allocatable", case=False, regex=True)
+    # Exclude byte/IO counters that swamp relative-change ranking and mislead RCA.
+    name_bad = name_bad | joined.index.get_level_values("metric").astype(str).str.contains(
+        "memory|filesystem|rss|working_set|page_faults|network|bytes", case=False, regex=True)
     joined = joined[(mag < 1e9) & (~name_bad)]
     joined["delta"] = joined["abnormal"] - joined["normal"]
     joined["rel"] = joined["delta"] / joined["normal"].abs().replace(0, 1e-9)
@@ -151,27 +154,85 @@ def query_logs(lake, inc, tool_call_id, service: str | None = None, top: int = 8
 
 
 # --------------------------------------------------------------------------- #
-# get_topology  (derived from traces, NOT from ground truth)
+# get_topology  (derived from NORMAL traces so a service that later goes silent
+# still appears in the dependency graph; NOT from ground truth)
 # --------------------------------------------------------------------------- #
 def get_topology(lake, inc, tool_call_id) -> list[Evidence]:
-    df = lake.read_table(inc.case_name, "abnormal_traces")
+    df = lake.read_table(inc.case_name, "normal_traces")
     edges: set[tuple[str, str]] = set()
     if not df.empty and {"span_id", "parent_span_id", "service_name"}.issubset(df.columns):
         svc = dict(zip(df["span_id"], df["service_name"]))
         for _, r in df.iterrows():
-            parent = r.get("parent_span_id")
-            caller = svc.get(parent)
+            caller = svc.get(r.get("parent_span_id"))
             callee = r["service_name"]
             if caller and callee and caller != callee:
                 edges.add((caller, callee))
     edge_list = sorted([list(e) for e in edges])
     services = sorted({s for e in edges for s in e})
-    obs = (f"Derived service dependency graph: {len(services)} services, {len(edge_list)} edges. "
-           + "; ".join(f"{a}->{b}" for a, b in edge_list[:8])) if edge_list else "No topology derivable."
+    obs = (f"Baseline service dependency graph ({len(services)} services, {len(edge_list)} edges; "
+           f"caller->callee): " + "; ".join(f"{a}->{b}" for a, b in edge_list[:16])
+           ) if edge_list else "No topology derivable."
     return [Evidence(kind=EvidenceKind.TOPOLOGY, observation=obs,
                      payload={"edges": edge_list, "services": services}, confidence=0.7,
-                     provenance=_prov(lake, inc, tool_call_id, "abnormal_traces.parquet",
-                                      "service topology from trace parent/child"))]
+                     provenance=_prov(lake, inc, tool_call_id, "normal_traces.parquet",
+                                      "service dependency graph from normal-window trace parent/child"))]
+
+
+# --------------------------------------------------------------------------- #
+# detect_silent_services  (telemetry disappearance = failure or lost traffic)
+# --------------------------------------------------------------------------- #
+def detect_silent_services(lake, inc, tool_call_id, drop_threshold: float = 0.15) -> list[Evidence]:
+    nt = lake.read_table(inc.case_name, "normal_traces")
+    at = lake.read_table(inc.case_name, "abnormal_traces")
+    nc = nt.groupby("service_name").size() if not nt.empty else {}
+    ac = at.groupby("service_name").size() if not at.empty else {}
+    dropped = []
+    for s in (nc.index if hasattr(nc, "index") else []):
+        n = int(nc[s]); a = int(ac.get(s, 0))
+        if n >= 20 and a < drop_threshold * n:
+            dropped.append({"service": s, "normal_spans": n, "abnormal_spans": a,
+                            "drop_pct": round(1 - a / n, 3)})
+    dropped.sort(key=lambda d: d["drop_pct"], reverse=True)
+    obs = ("Services whose spans largely DISAPPEARED in the abnormal window (failure or lost "
+           "upstream traffic): " + ", ".join(f"{d['service']} ({d['normal_spans']}->{d['abnormal_spans']})"
+                                              for d in dropped)) if dropped else "No services went silent."
+    return [Evidence(kind=EvidenceKind.TRACE, observation=obs, payload={"silent": dropped},
+                     confidence=0.8,
+                     provenance=_prov(lake, inc, tool_call_id, "normal_traces.parquet|abnormal_traces.parquet",
+                                      "span-count disappearance normal vs abnormal"))]
+
+
+# --------------------------------------------------------------------------- #
+# pod_health  (deployment availability / readiness / restarts = PodFailure signature)
+# --------------------------------------------------------------------------- #
+def pod_health(lake, inc, tool_call_id) -> list[Evidence]:
+    nm = lake.read_table(inc.case_name, "normal_metrics")
+    am = lake.read_table(inc.case_name, "abnormal_metrics")
+
+    def mbs(df, metric):
+        d = df[df["metric"] == metric]
+        return d.groupby("service_name")["value"].mean() if not d.empty else {}
+
+    avail_a, desired_a = mbs(am, "k8s.deployment.available"), mbs(am, "k8s.deployment.desired")
+    ready_a = mbs(am, "k8s.container.ready")
+    rn, ra = mbs(nm, "k8s.container.restarts"), mbs(am, "k8s.container.restarts")
+    failed = []
+    idx = avail_a.index if hasattr(avail_a, "index") else []
+    for s in idx:
+        av = float(avail_a.get(s))
+        des = float(desired_a.get(s, 1.0)) if hasattr(desired_a, "get") else 1.0
+        if des and av < des:  # fewer pods available than desired => pod-level failure
+            failed.append({"service": s, "available": round(av, 2), "desired": round(des, 2),
+                           "ready": round(float(ready_a.get(s)), 2) if hasattr(ready_a, "get") and ready_a.get(s) is not None else None,
+                           "restart_delta": round(float(ra.get(s, 0)) - float(rn.get(s, 0)), 2) if hasattr(ra, "get") else None})
+    failed.sort(key=lambda f: f["available"])
+    obs = ("Pod-level FAILURE signature (deployment.available < desired) in: "
+           + ", ".join(f"{f['service']} (avail {f['available']}/{f['desired']})" for f in failed)
+           ) if failed else "No pod-level failures detected (all deployments fully available)."
+    return [Evidence(kind=EvidenceKind.METRIC, observation=obs, payload={"failed_pods": failed},
+                     confidence=0.9,
+                     provenance=_prov(lake, inc, tool_call_id, "abnormal_metrics.parquet",
+                                      "deployment availability/readiness/restarts"))]
 
 
 # --------------------------------------------------------------------------- #
@@ -190,8 +251,18 @@ TOOLS: dict[str, ToolSpec] = {
         "Count error/warn log volume per service during the abnormal window, with samples.",
         {"type": "object", "properties": _SVC_PARAM}, query_logs, EvidenceKind.LOG),
     "get_topology": ToolSpec("get_topology",
-        "Derive the service dependency graph from trace parent/child relationships.",
+        "Baseline service dependency graph (caller->callee) from normal-window traces; includes "
+        "services that later go silent.",
         {"type": "object", "properties": {}}, get_topology, EvidenceKind.TOPOLOGY),
+    "detect_silent_services": ToolSpec("detect_silent_services",
+        "Find services whose telemetry (spans) largely disappeared in the abnormal window vs "
+        "normal — a strong failure / lost-traffic signal.",
+        {"type": "object", "properties": {}}, detect_silent_services, EvidenceKind.TRACE),
+    "pod_health": ToolSpec("pod_health",
+        "Per-service pod health: deployment available-vs-desired, container readiness and restart "
+        "deltas. available<desired is the PodFailure signature and distinguishes a killed service "
+        "(root) from one that merely lost traffic (cascaded victim).",
+        {"type": "object", "properties": {}}, pod_health, EvidenceKind.METRIC),
 }
 
 

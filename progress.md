@@ -2,7 +2,29 @@
 
 Living status log. Update after every meaningful change.
 
-## Current state: PHASE 1 COMPLETE ✅ — 20/20 tests green (incl. live Azure integration)
+## Current state: PHASE 3 COMPLETE ✅ — accuracy solved (24/24 tests green)
+
+### Phase 3 (knowledge plane, accuracy) — DONE 2026-10-03, no new Azure cost
+Added `src/deeprca/knowledge/` (fault signatures + localization heuristic = ontology-as-code,
+injected into the projection, GT-free). New Evidence tools: `pod_health` (deployment
+available<desired = PodFailure signature — the decisive signal), `detect_silent_services`
+(span disappearance), topology now from the NORMAL baseline (silent services stay visible),
+de-noised `query_metrics`. Investigator prompt now applies "root = pod-level failure; a silent
+service with pods still available is a CASCADED victim, not the root".
+
+Result over 3 hs PodFailure incidents (eval/harness.py): **localization_exact 1.0, fault_type 1.0,
+causal_path_valid 1.0, isolation_clean 1.0** — up from the Phase-1 miss.
+- batch-...SWG9FS -> geo,profile (exact)
+- batch-...GPT3   -> profile,recommendation (exact)
+- batch-...QJT3A  -> profile,search (exact)
+tests.json Phase-3 gate GREEN. Causal-path builder now synthesizes missing nodes + backfills
+edge provenance from collected evidence.
+
+Batch harness: eval/harness.py <case...>. Additional incidents loaded into Azure for the eval.
+
+---
+
+## PHASE 1 COMPLETE ✅ — 20/20 tests green (incl. live Azure integration)
 
 Phase-1 vertical slice runs end-to-end on Azure: loads one incident (GT hidden),
 exposes telemetry via 4 tools, Investigator (Agent Framework / Foundry gpt-4.1) forms

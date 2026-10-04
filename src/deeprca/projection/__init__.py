@@ -7,6 +7,7 @@ ground truth. Keeping construction here makes that auditable in one place.
 from __future__ import annotations
 
 from ..evidence.tools import TOOLS
+from ..knowledge import domain_knowledge
 from ..models import Incident, Investigation
 
 
@@ -34,6 +35,7 @@ def build_projection(incident: Incident, inv: Investigation) -> dict:
                               incident.normal_window.end.isoformat()],
             "symptoms": incident.symptoms,
         },
+        "knowledge": domain_knowledge(),
         "available_tools": [
             {"name": s.name, "description": s.description, "parameters": s.parameters}
             for s in TOOLS.values()

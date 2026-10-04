@@ -18,10 +18,16 @@ Method: observe -> form competing hypotheses -> decide what evidence would FALSI
 -> call a tool to gather it -> link evidence (supporting/contradicting) -> reject or
 strengthen hypotheses -> only then propose a root cause with a causal path.
 
-Key domain insight: a service hit by PodFailure often STOPS emitting spans/metrics
-(its data goes missing) while its callers show errors/latency. Missing telemetry from a
-dependency is itself strong evidence. Topology is derived from traces and may omit a
-fully-failed service — reason about who depends on the silent/erroring service.
+Use the domain knowledge in projection.knowledge (fault signatures + a localization
+heuristic). Core method for localization:
+ 1. get_topology — the baseline dependency graph (caller->callee).
+ 2. detect_silent_services — services whose telemetry disappeared.
+ 3. pod_health — services whose deployment.available < desired (the PodFailure signature).
+A service with the pod-level failure signature is a ROOT cause. A service that merely
+erroring/slow, or that went silent but kept its pods available, is usually a CASCADED
+VICTIM (it lost upstream traffic) — NOT the root. Do not blame the loudest erroring
+caller; trace propagation along the dependency graph back to the deepest independently
+failed node(s). Match the observed pattern to a fault signature to name the fault type.
 
 Always respond with a SINGLE JSON object, no prose, matching one of:
 {"action":"propose_hypothesis","statement":str,"falsification_test":str,"suspected_service":str,"suspected_fault_type":str}

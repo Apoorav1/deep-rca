@@ -13,7 +13,9 @@ The runtime agents are built on **Microsoft Agent Framework**; the model is **Az
 to Azure Blob. A core experimental constraint is enforced throughout: **benchmark ground truth is
 isolated from everything the investigator can see.**
 
-> **Status: Phase 1 complete — 20/20 tests green, including a live end-to-end Azure integration run.**
+> **Status: Phases 1 & 3 complete — 24/24 tests green (incl. live Azure integration).**
+> Phase 3 (knowledge plane) takes localization from a Phase-1 miss to **exact on 3/3 incidents**
+> (localization_exact 1.0, fault_type 1.0, valid causal path 1.0, GT-isolation clean 1.0).
 
 ---
 
@@ -121,7 +123,8 @@ src/deeprca/
   agents/       investigator.py · evaluator.py (Agent Framework agents)
   workflow/     the investigation loop / state machine
   config.py     runtime config (evidence + state + model only; NO ground truth)
-eval/           OFFLINE plane — ground_truth/ loader, gt_store, scorer (only GT access)
+  knowledge/    knowledge plane: fault signatures + localization heuristic (ontology-as-code)
+eval/           OFFLINE plane — ground_truth/ loader, gt_store, scorer, harness (only GT access)
 tests/          unit/ · isolation/ (import-ban) · integration/ (live Azure slice)
 docs/           architecture.md · ontology.md · evaluation.md
 infra/          provisioning helpers, data loader, Phase-1 runner + live demo
@@ -203,8 +206,10 @@ Phase-1 acceptance criteria live in `tests.json` (all `pass`).
 1. **✅ Phase 1** — end-to-end vertical slice: one incident, GT hidden, ≥3 tool calls, persistent
    ledger, proposal, blind evaluator, offline scoring, isolation verified.
 2. **Phase 2** — real Evidence Plane on Microsoft Fabric/OneLake + Cosmos state + richer tools.
-3. **Phase 3** — Knowledge plane: ontology (Fabric Ontology) + knowledge graph + Foundry IQ;
-   missing-telemetry/topology reasoning (the accuracy lever).
+3. **✅ Phase 3** — Knowledge plane (accuracy lever): fault signatures + localization heuristic
+   (ontology-as-code in `src/deeprca/knowledge/`), `pod_health` / `detect_silent_services` tools,
+   baseline topology, and "root vs cascaded victim" reasoning. **Exact localization on 3/3 hs
+   PodFailure incidents.** Future: materialize in Fabric Ontology + knowledge graph + Foundry IQ.
 4. **Phase 4** — rigorous blind Evaluator (falsification, decision policy; separate model).
 5. **Phase 5** — durable long-running execution via Agent Framework **Durable Extension** + HITL.
 6. **Phase 6** — full benchmark scale (all 455 scenarios) + batch harness + metrics.
