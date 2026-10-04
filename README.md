@@ -184,6 +184,16 @@ PYTHONIOENCODING=utf-8 PYTHONPATH="src;." .venv/Scripts/python infra/demo_phase1
 It narrates hypotheses forming, tool calls and findings, the blind Evaluator's verdicts, the final
 proposal, then reveals ground truth (offline) and prints the scorecard + isolation check.
 
+### 5. Local web UI (Gradio)
+```bash
+pip install -e ".[demo]"                                # installs gradio
+set -a; source infra/runtime.env; set +a
+PYTHONPATH="src;." python app/ui.py                      # opens http://localhost:7860
+```
+Pick an incident from the dropdown and click **Run investigation**. The UI streams the live
+timeline (hypotheses, tool findings, blind-Evaluator verdicts, proposal), then reveals ground
+truth from the offline plane with the scorecard, hypothesis ledger, and GT-isolation check.
+
 ---
 
 ## Phase 1 results

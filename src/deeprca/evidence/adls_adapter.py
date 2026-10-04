@@ -35,6 +35,14 @@ class EvidenceLake:
     def _read_bytes(self, path: str) -> bytes:
         return self._fs.get_file_client(path).download_file().readall()
 
+    def list_cases(self) -> list[str]:
+        """Discover incident case ids present in the evidence lake (cases/<id>/)."""
+        try:
+            paths = self._fs.get_paths(path="cases", recursive=False)
+            return sorted(p.name.rsplit("/", 1)[-1] for p in paths if getattr(p, "is_directory", False))
+        except Exception:
+            return []
+
     def read_env(self, case: str) -> dict:
         return json.loads(self._read_bytes(f"cases/{case}/env.json"))
 
