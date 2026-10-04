@@ -23,8 +23,10 @@ def _evidence_digest(inv: Investigation, limit: int = 12) -> list[dict]:
     return out
 
 
-def build_projection(incident: Incident, inv: Investigation) -> dict:
-    return {
+def build_projection(incident: Incident, inv: Investigation, *,
+                     include_knowledge: bool = True, tool_names: list[str] | None = None) -> dict:
+    tools = list(TOOLS.values()) if tool_names is None else [TOOLS[n] for n in tool_names if n in TOOLS]
+    proj = {
         "incident": {
             "case": incident.case_name,
             "system": incident.system,
@@ -35,10 +37,9 @@ def build_projection(incident: Incident, inv: Investigation) -> dict:
                               incident.normal_window.end.isoformat()],
             "symptoms": incident.symptoms,
         },
-        "knowledge": domain_knowledge(),
         "available_tools": [
             {"name": s.name, "description": s.description, "parameters": s.parameters}
-            for s in TOOLS.values()
+            for s in tools
         ],
         "hypotheses": [
             {
@@ -65,3 +66,6 @@ def build_projection(incident: Incident, inv: Investigation) -> dict:
         "budget": {"step": inv.step, "max_steps": inv.max_steps,
                    "cost_spent": inv.cost_spent, "cost_budget": inv.cost_budget},
     }
+    if include_knowledge:
+        proj["knowledge"] = domain_knowledge()
+    return proj

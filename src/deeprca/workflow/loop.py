@@ -106,6 +106,8 @@ async def run_investigation(
     store=None,
     max_steps: int = 24,
     observer=None,
+    include_knowledge: bool = True,
+    allowed_tools: list[str] | None = None,
 ) -> Investigation:
     def emit(kind: str, data: dict) -> None:
         if observer:
@@ -120,7 +122,8 @@ async def run_investigation(
 
     while inv.step < inv.max_steps:
         inv = apply(inv, Tick())
-        proj = build_projection(incident, inv)
+        proj = build_projection(incident, inv, include_knowledge=include_knowledge,
+                                tool_names=allowed_tools)
         try:
             raw = await investigator.decide(proj, nudge=_nudge(inv))
         except Exception:  # malformed model output: retry next step
@@ -144,6 +147,8 @@ async def run_investigation(
             if inv.proposed_root_cause is None and len(inv.tool_calls) >= MAX_TOOL_CALLS:
                 continue
             tool = str(raw.get("tool", ""))
+            if allowed_tools is not None and tool not in allowed_tools:
+                continue  # tool not available in this mode (e.g. Phase-1 baseline)
             args = raw.get("args", {}) or {}
             inv = apply(inv, RequestEvidence(tool=tool, args=args))
             tc = inv.tool_calls[-1]
@@ -193,7 +198,8 @@ async def run_investigation(
 
         # Blind evaluation once a root cause exists.
         if inv.proposed_root_cause is not None:
-            ev = await evaluator.evaluate(build_projection(incident, inv))
+            ev = await evaluator.evaluate(build_projection(
+                incident, inv, include_knowledge=include_knowledge, tool_names=allowed_tools))
             inv = apply(inv, RecordEvaluation(evaluation=ev))
             emit("evaluation", {"step": inv.step, "decision": ev.decision.value,
                                 "rationale": ev.rationale, "n_critiques": len(ev.critiques)})

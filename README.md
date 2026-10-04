@@ -190,9 +190,15 @@ pip install -e ".[demo]"                                # installs gradio
 set -a; source infra/runtime.env; set +a
 PYTHONPATH="src;." python app/ui.py                      # opens http://localhost:7860
 ```
-Pick an incident from the dropdown and click **Run investigation**. The UI streams the live
-timeline (hypotheses, tool findings, blind-Evaluator verdicts, proposal), then reveals ground
-truth from the offline plane with the scorecard, hypothesis ledger, and GT-isolation check.
+Two tabs:
+- **🔎 Investigate** — pick an incident and a **mode**, click **Run investigation**. The UI streams
+  the live timeline (hypotheses, tool findings, blind-Evaluator verdicts, proposal), then reveals
+  ground truth from the offline plane with the scorecard, hypothesis ledger, and GT-isolation check.
+  The **mode toggle** is an ablation: *Phase 3 — knowledge plane ON* vs *Phase 1 — baseline*
+  (hides pod-health/silent-service tools + the localization heuristic). Run the same incident in
+  both to watch the knowledge plane flip a **miss** into a **hit**.
+- **🏛️ Architecture & Design** — the four planes, isolation guarantees, core loop, typed models,
+  the two agents, the live Evidence-Plane tool registry, and the knowledge-plane fault signatures.
 
 ---
 

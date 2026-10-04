@@ -21,12 +21,18 @@ from azure.identity import DefaultAzureCredential
 from deeprca.agents import EvaluatorAgent, InvestigatorAgent
 from deeprca.config import RuntimeConfig
 from deeprca.evidence import EvidenceLake, load_incident
+from deeprca.evidence.tools import TOOLS
+from deeprca.knowledge import domain_knowledge
 from deeprca.projection import build_projection
 from deeprca.state import BlobLedgerStore
 from deeprca.workflow import run_investigation
 
 CFG = RuntimeConfig.from_env()
 CRED = DefaultAzureCredential()
+
+PHASE1_TOOLS = ["query_metrics", "query_traces", "query_logs", "get_topology"]
+MODE_P3 = "Phase 3 — knowledge plane ON"
+MODE_P1 = "Phase 1 — baseline (knowledge OFF)"
 
 
 def _cases() -> list[str]:
@@ -79,10 +85,11 @@ def _event_html(kind: str, d: dict) -> str:
     return ""
 
 
-def _header_html(inc) -> str:
+def _header_html(inc, mode: str = "") -> str:
+    mode_badge = (f"<br>mode: <b>{esc(mode)}</b>" if mode else "")
     return _card("#3b82f6", f"🚀 Investigating incident · {esc(inc.case_name)}",
                  f"system <b>{esc(inc.system)}</b> · namespace {esc(inc.namespace)} · abnormal window "
-                 f"{esc(inc.abnormal_window.start)} → {esc(inc.abnormal_window.end)}"
+                 f"{esc(inc.abnormal_window.start)} → {esc(inc.abnormal_window.end)}{mode_badge}"
                  f"<br><span style='opacity:.6'>Ground truth is hidden from the Investigator and the Evaluator.</span>")
 
 
@@ -136,27 +143,31 @@ def _final_html(inc, inv, store) -> str:
     return out
 
 
-async def investigate(case: str):
+async def investigate(case: str, mode: str):
     if not case:
         yield "<p>Select an incident and click <b>Run investigation</b>.</p>"
         return
+    knowledge_mode = (mode == MODE_P3)
+    allowed = None if knowledge_mode else PHASE1_TOOLS
     lake = EvidenceLake(CFG.evidence_account, CRED, CFG.evidence_filesystem)
     inc = load_incident(lake, case)
     store = BlobLedgerStore(CFG.state_account, CRED, CFG.state_container)
-    investigator, evaluator = InvestigatorAgent(CFG.model), EvaluatorAgent(CFG.model)
+    investigator = InvestigatorAgent(CFG.model, knowledge_mode=knowledge_mode)
+    evaluator = EvaluatorAgent(CFG.model)
 
     q: asyncio.Queue = asyncio.Queue()
 
     async def runner():
         try:
             inv = await run_investigation(inc, lake, investigator, evaluator, store=store,
-                                          observer=lambda k, d: q.put_nowait((k, d)))
+                                          observer=lambda k, d: q.put_nowait((k, d)),
+                                          include_knowledge=knowledge_mode, allowed_tools=allowed)
             await q.put(("__done__", inv))
         except Exception as e:  # surface failures in the UI
             await q.put(("__error__", repr(e)))
 
     asyncio.create_task(runner())
-    parts = [_header_html(inc)]
+    parts = [_header_html(inc, mode)]
     yield "".join(parts)
     while True:
         kind, data = await q.get()
@@ -174,18 +185,100 @@ async def investigate(case: str):
             yield "".join(parts)
 
 
+def _sec(title: str, body: str, color: str = "#3b82f6") -> str:
+    return (f"<div style='border-left:4px solid {color};padding:6px 14px;margin:10px 0'>"
+            f"<div style='font-weight:700;font-size:1.05em'>{title}</div>{body}</div>")
+
+
+def _architecture_html() -> str:
+    tool_rows = "".join(
+        f"<tr><td style='padding:3px 10px;vertical-align:top'><code>{esc(s.name)}</code></td>"
+        f"<td style='padding:3px 10px;opacity:.85'>{esc(s.description)}</td></tr>"
+        for s in TOOLS.values())
+    k = domain_knowledge()
+    sig_rows = "".join(
+        f"<tr><td style='padding:3px 10px;vertical-align:top'><b>{esc(name)}</b></td>"
+        f"<td style='padding:3px 10px;opacity:.85'>{esc(v['decisive_signal'])}</td></tr>"
+        for name, v in k["fault_signatures"].items())
+
+    planes = (
+        "<table style='border-collapse:collapse'>"
+        "<tr style='opacity:.6'><th style='text-align:left;padding:3px 10px'>Plane</th>"
+        "<th style='text-align:left;padding:3px 10px'>Contents</th>"
+        "<th style='text-align:left;padding:3px 10px'>Access</th></tr>"
+        "<tr><td style='padding:3px 10px'><b>Control</b></td><td style='padding:3px 10px'>Agent-Framework loop: Investigator ⇄ reducer ⇄ blind Evaluator</td><td style='padding:3px 10px'>orchestrates</td></tr>"
+        "<tr><td style='padding:3px 10px'><b>Knowledge</b></td><td style='padding:3px 10px'>ontology-as-code: fault signatures + localization heuristic</td><td style='padding:3px 10px'>read-only</td></tr>"
+        "<tr><td style='padding:3px 10px'><b>Evidence</b></td><td style='padding:3px 10px'>telemetry tools over ADLS Gen2 (metrics/traces/logs/topology/pod-health)</td><td style='padding:3px 10px'>read-only</td></tr>"
+        "<tr><td style='padding:3px 10px'><b>Investigation state</b></td><td style='padding:3px 10px'>typed ledger (Azure Blob), checkpointed</td><td style='padding:3px 10px'>reducer-write</td></tr>"
+        "<tr><td style='padding:3px 10px'><b>Offline eval</b> 🔒</td><td style='padding:3px 10px'>ground-truth store + scorer (air-gapped)</td><td style='padding:3px 10px'>eval identity only</td></tr>"
+        "</table>")
+
+    models = " · ".join(f"<code>{m}</code>" for m in
+                        ["Incident", "Evidence", "Hypothesis", "ToolCall", "CausalPath",
+                         "Investigation", "Evaluation", "Escalation"])
+
+    loop = ("INITIALIZED → OBSERVING → HYPOTHESIZING → EVIDENCE_PLANNING → COLLECTING → "
+            "LEDGER_UPDATE → EVALUATION → {CONTINUE↺ | CONCLUDE→propose→CONCLUDED | ESCALATE→HITL}")
+
+    html_out = (
+        _sec("Four separated planes", planes) +
+        _sec("Ground-truth isolation (verified 3 ways)",
+             "<ul style='margin:4px 0'>"
+             "<li><b>Identity:</b> Investigator managed identity has zero roles on the GT store; "
+             "only the eval identity can read it.</li>"
+             "<li><b>Static:</b> nothing under <code>src/deeprca/</code> may import <code>eval/</code> "
+             "(enforced by a test).</li>"
+             "<li><b>Runtime:</b> a scan asserts no GT markers (GT account, filenames, injection UUIDs) "
+             "appear in the projection or ledger.</li></ul>", "#22c55e") +
+        _sec("Core loop / state machine", f"<code style='opacity:.85'>{esc(loop)}</code>", "#f59e0b") +
+        _sec("Ledger-as-truth",
+             "The authoritative state is the typed <code>Investigation</code> aggregate. The LLM is a "
+             "stateless step function: it reads a deterministic <b>projection</b> and emits a <b>typed "
+             "action</b>; a pure reducer applies it; the ledger is checkpointed. Conversation history is "
+             "never authoritative.", "#8b5cf6") +
+        _sec("Typed domain models", f"<div style='opacity:.85'>{models}</div>", "#06b6d4") +
+        _sec("Agents (Microsoft Agent Framework on Foundry gpt-4.1)",
+             "<ul style='margin:4px 0'>"
+             "<li><b>InvestigatorAgent</b> — sees a GT-free projection; emits one typed action "
+             "(propose_hypothesis · request_evidence · link_evidence · propose_root_cause).</li>"
+             "<li><b>EvaluatorAgent (BLIND)</b> — independent critic; never sees GT; emits exactly one "
+             "decision: CONTINUE / CONCLUDE / ESCALATE after challenging evidence sufficiency, causal & "
+             "temporal validity, contradictions, and alternatives.</li></ul>", "#8b5cf6") +
+        _sec("Evidence-Plane tools",
+             f"<table style='border-collapse:collapse'>{tool_rows}</table>", "#06b6d4") +
+        _sec("Knowledge plane — fault signatures (decisive signal)",
+             f"<table style='border-collapse:collapse'>{sig_rows}</table>"
+             f"<div style='margin-top:6px;opacity:.85'><b>Localization heuristic:</b> "
+             f"{esc(k['localization_heuristic'])}</div>", "#3b82f6") +
+        _sec("Azure footprint (Phase-1 leaner)",
+             "Foundry <code>gpt-4.1</code> (Responses API) · ADLS Gen2 evidence lake · Blob ledger · "
+             "isolated GT storage + managed identities with scoped RBAC · AAD auth end-to-end.", "#64748b")
+    )
+    return html_out
+
+
 def build() -> gr.Blocks:
     with gr.Blocks(title="Deep-RCA") as demo:
         gr.Markdown("# Deep-RCA — autonomous root-cause investigation\n"
                     "Pick an OpenRCA incident and watch the agent investigate. Ground truth is "
                     "isolated — revealed only by the offline evaluation plane at the end.")
-        with gr.Row():
-            case = gr.Dropdown(choices=_cases(), label="Incident (OpenRCA 2.0 / ops-lite case)",
-                               value=(_cases()[0] if _cases() else None), scale=4)
-            run = gr.Button("Run investigation", variant="primary", scale=1)
-        timeline = gr.HTML(label="Investigation", autoscroll=True,
-                           value="<p style='opacity:.6'>Select an incident and click Run.</p>")
-        run.click(investigate, inputs=case, outputs=timeline)
+        with gr.Tabs():
+            with gr.Tab("🔎 Investigate"):
+                with gr.Row():
+                    case = gr.Dropdown(choices=_cases(), label="Incident (OpenRCA 2.0 / ops-lite case)",
+                                       value=(_cases()[0] if _cases() else None), scale=3)
+                    mode = gr.Radio([MODE_P3, MODE_P1], value=MODE_P3, scale=2,
+                                    label="Mode (ablation)",
+                                    info="Phase 3 = knowledge plane + pod-health/silent tools. "
+                                         "Phase 1 = baseline without them (watch it miss).")
+                    run = gr.Button("Run investigation", variant="primary", scale=1)
+                timeline = gr.HTML(autoscroll=True,
+                                   value="<p style='opacity:.6'>Select an incident and mode, then Run. "
+                                         "Try the same incident in both modes to see the knowledge plane "
+                                         "flip a miss into a hit.</p>")
+                run.click(investigate, inputs=[case, mode], outputs=timeline)
+            with gr.Tab("🏛️ Architecture & Design"):
+                gr.HTML(_architecture_html())
     return demo
 
 
